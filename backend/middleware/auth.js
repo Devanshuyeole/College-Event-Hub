@@ -1,5 +1,5 @@
 const jwt = require("jsonwebtoken");
-const JWT_SECRET = "super_secret_key"; // put in env file in real projects
+const JWT_SECRET = process.env.JWT_SECRET || "super_secret_key";
 
 // Verify JWT
 function authenticateToken(req, res, next) {

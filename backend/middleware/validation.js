@@ -36,14 +36,20 @@ const validateSignup = (req, res, next) => {
     errors.push('Invalid role specified');
   }
 
-  // Authorization code validation for admin roles
+  // ✅ UPDATED: Authorization code validation with environment variables
   if (role === 'super_admin' || role === 'college_admin') {
     if (!authorizationCode) {
       errors.push(`Authorization code is required for ${role.replace('_', ' ')} registration`);
-    } else if (role === 'super_admin' && authorizationCode !== process.env.SUPER_ADMIN_AUTH_CODE) {
-      errors.push('Invalid super admin authorization code');
-    } else if (role === 'college_admin' && authorizationCode !== process.env.COLLEGE_ADMIN_AUTH_CODE) {
-      errors.push('Invalid college admin authorization code');
+    } else {
+      // Get codes from environment variables
+      const superAdminCode = process.env.SUPER_ADMIN_AUTH_CODE || 'SuperAdmin@123';
+      const collegeAdminCode = process.env.COLLEGE_ADMIN_AUTH_CODE || 'CollegeAdmin@123';
+
+      if (role === 'super_admin' && authorizationCode !== superAdminCode) {
+        errors.push('Invalid super admin authorization code');
+      } else if (role === 'college_admin' && authorizationCode !== collegeAdminCode) {
+        errors.push('Invalid college admin authorization code');
+      }
     }
   }
 

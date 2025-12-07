@@ -1,3 +1,4 @@
+require('dotenv').config()
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -73,7 +74,7 @@ app.post("/registrations", authenticateToken, authorizeRoles("student"), async (
 
 
 
-const JWT_SECRET = "super_secret_key"; // use env variables in real projects
+const JWT_SECRET = process.env.JWT_SECRET || "super_secret_key"; // use env variables in real projects
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -431,6 +432,186 @@ app.get("/registrations/user/:userId", (req, res) => {
     if (err) throw err;
     res.json(result);
   });
+});
+
+// Send notification to all users (Admin only)
+app.post("/notifications/broadcast", 
+  authenticateToken, 
+  authorizeRoles("college_admin", "super_admin"), 
+  async (req, res) => {
+    try {
+      const { title, message, type = 'general' } = req.body;
+      
+      // Validate input
+      if (!title || !message) {
+        return res.status(400).json({ 
+          message: "Title and message are required" 
+        });
+      }
+
+      // Get all student users
+      const [students] = await db.promise().query(
+        'SELECT id FROM Users WHERE role = ?',
+        ['student']
+      );
+
+      if (students.length === 0) {
+        return res.status(404).json({ 
+          message: "No students found to notify" 
+        });
+      }
+
+      // Create notification for each student
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (const student of students) {
+        try {
+          await db.promise().query(
+            'INSERT INTO Notifications (user_id, event_id, title, message, type) VALUES (?, ?, ?, ?, ?)',
+            [student.id, null, title, message, type]
+          );
+          successCount++;
+        } catch (err) {
+          errorCount++;
+        }
+      }
+
+      res.json({ 
+        message: `Notification sent to ${successCount} students successfully`,
+        success: successCount,
+        failed: errorCount,
+        total: students.length
+      });
+    } catch (error) {
+      res.status(500).json({ 
+        message: "Failed to broadcast notifications",
+        error: error.message 
+      });
+    }
+  }
+);
+
+// Get all notifications for a specific user (with userId in URL)
+app.get("/notifications/:userId", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Verify user is requesting their own notifications (or is super_admin)
+    if (req.user.id !== parseInt(userId) && req.user.role !== 'super_admin') {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const [notifications] = await db.promise().query(
+      `SELECT n.*, e.title as event_title 
+       FROM Notifications n
+       LEFT JOIN Events e ON n.event_id = e.id
+       WHERE n.user_id = ?
+       ORDER BY n.created_at DESC
+       LIMIT 50`,
+      [userId]
+    );
+
+    res.json(notifications);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch notifications", error: error.message });
+  }
+});
+
+// Get unread notification count for a specific user
+app.get("/notifications/:userId/unread-count", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    
+    if (req.user.id !== parseInt(userId) && req.user.role !== 'super_admin') {
+      console.log(`❌ Access denied`);
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const [result] = await db.promise().query(
+      "SELECT COUNT(*) as count FROM Notifications WHERE user_id = ? AND read_status = FALSE",
+      [userId]
+    );
+
+    const count = result[0].count;
+    
+    res.json({ count: count });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch unread count", error: error.message });
+  }
+});
+
+// Mark all notifications as read for a user
+app.put("/notifications/:userId/read-all", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (req.user.id !== parseInt(userId) && req.user.role !== 'super_admin') {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    await db.promise().query(
+      "UPDATE Notifications SET read_status = TRUE WHERE user_id = ?",
+      [userId]
+    );
+
+    res.json({ message: "All notifications marked as read" });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to mark all as read" });
+  }
+});
+
+// Delete a notification
+app.delete("/notifications/:notificationId", authenticateToken, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+
+    // Verify notification belongs to user
+    const [notification] = await db.promise().query(
+      "SELECT user_id FROM Notifications WHERE id = ?",
+      [notificationId]
+    );
+
+    if (notification.length === 0) {
+      return res.status(404).json({ message: "Notification not found" });
+    }
+
+    if (notification[0].user_id !== req.user.id && req.user.role !== 'super_admin') {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    await db.promise().query("DELETE FROM Notifications WHERE id = ?", [notificationId]);
+    res.json({ message: "Notification deleted" });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to delete notification" });
+  }
+});
+
+// Test endpoint to create a notification manually
+app.post("/notifications/test", authenticateToken, async (req, res) => {
+  try {
+    
+    await db.promise().query(
+      'INSERT INTO Notifications (user_id, event_id, title, message, type, read_status) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.user.id, null, 'Test Notification', 'This is a test notification', 'general', false]
+    );
+    
+    const [notifications] = await db.promise().query(
+      'SELECT * FROM Notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 1',
+      [req.user.id]
+    );
+    
+    res.json({ 
+      message: 'Test notification created',
+      notification: notifications[0]
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      message: 'Failed to create test notification',
+      error: error.message 
+    });
+  }
 });
 
 // --------- EVENTS (Admin only for create/update/delete) ----------
